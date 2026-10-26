@@ -1,0 +1,40 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: stream-processor
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: nexusflow-cqrs-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      ack-mode: record
+      concurrency: 3
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+aws:
+  region: ${AWS_REGION:us-east-1}
+  endpoint-url: ${AWS_ENDPOINT_URL:http://localhost:4566}
+  access-key-id: ${AWS_ACCESS_KEY_ID:mock_access_key}
+  secret-access-key: ${AWS_SECRET_ACCESS_KEY:mock_secret_key}
+  dynamodb:
+    table-name: ${DYNAMODB_TABLE_NAME:nexusflow_events}
+  sqs:
+    dlq-url: ${SQS_DLQ_URL:http://localhost:4566/000000000000/nexusflow-dlq}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}

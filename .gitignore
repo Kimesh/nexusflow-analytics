@@ -1,0 +1,45 @@
+# Gitignore for NexusFlow Analytics Monorepo
+
+# Target & Builds
+target/
+build/
+dist/
+node_modules/
+*.class
+*.jar
+*.war
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.pytest_cache/
+
+# IDE & OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Docker volumes & local state
+postgres_data/
+kafka_data/
+redis_data/
+localstack_data/
+prometheus_data/
+grafana_data/
+loki_data/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# Secrets & Local env
+.env
+.env.local
+*.log

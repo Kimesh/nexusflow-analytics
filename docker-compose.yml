@@ -1,0 +1,252 @@
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. Transactional Database (PostgreSQL 16 - OLTP Store)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexusflow-postgres
+    restart: unless-stopped
+    mem_limit: 220m
+    environment:
+      POSTGRES_DB: nexusflow
+      POSTGRES_USER: nexusflow_user
+      POSTGRES_PASSWORD: nexusflow_secure_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexusflow_user -d nexusflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # 2. Distributed Event Streaming (Apache Kafka in KRaft Mode)
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: nexusflow-kafka
+    restart: unless-stopped
+    mem_limit: 384m
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:29092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LOG_DIRS: '/tmp/kraft-combined-logs'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+      KAFKA_HEAP_OPTS: "-Xms128m -Xmx256m"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  # ---------------------------------------------------------------------------
+  # 3. Distributed Cache & Coordination (Redis 7)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: nexusflow-redis
+    restart: unless-stopped
+    mem_limit: 100m
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # 4. Zero-Cost Cloud Emulation (LocalStack: DynamoDB, S3, SQS)
+  # ---------------------------------------------------------------------------
+  localstack:
+    image: localstack/localstack:3.0.2
+    container_name: nexusflow-localstack
+    mem_limit: 384m
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=dynamodb,s3,sqs
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./docker/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh
+      - "/var/run/docker.sock:/var/run/docker.sock"
+
+  # ---------------------------------------------------------------------------
+  # 5. Observability (Prometheus, Grafana, Loki)
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: nexusflow-prometheus
+    restart: unless-stopped
+    mem_limit: 120m
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: nexusflow-grafana
+    restart: unless-stopped
+    mem_limit: 140m
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  loki:
+    image: grafana/loki:2.9.2
+    container_name: nexusflow-loki
+    restart: unless-stopped
+    mem_limit: 120m
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./docker/loki/loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+
+  # ---------------------------------------------------------------------------
+  # 6. Core Gateway & Ingestion Service (Java 17 / Spring Boot 3)
+  # ---------------------------------------------------------------------------
+  core-gateway-api:
+    build:
+      context: ./services/core-gateway-api
+      dockerfile: Dockerfile
+    container_name: nexusflow-core-gateway
+    restart: unless-stopped
+    mem_limit: 340m
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=nexusflow
+      - DB_USER=nexusflow_user
+      - DB_PASSWORD=nexusflow_secure_password
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=mock_access_key
+      - AWS_SECRET_ACCESS_KEY=mock_secret_key
+      - JAVA_TOOL_OPTIONS=-Xms128m -Xmx220m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # 7. Stream Processor & CQRS Projector (Java 17 / Kafka Consumer)
+  # ---------------------------------------------------------------------------
+  stream-processor:
+    build:
+      context: ./services/stream-processor
+      dockerfile: Dockerfile
+    container_name: nexusflow-stream-processor
+    restart: unless-stopped
+    mem_limit: 300m
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=mock_access_key
+      - AWS_SECRET_ACCESS_KEY=mock_secret_key
+      - DYNAMODB_TABLE_NAME=nexusflow_events
+      - SQS_DLQ_URL=http://localstack:4566/000000000000/nexusflow-dlq
+      - JAVA_TOOL_OPTIONS=-Xms128m -Xmx190m
+    depends_on:
+      - kafka
+      - redis
+      - localstack
+
+  # ---------------------------------------------------------------------------
+  # 8. AI-Powered Audit & Anomaly Engine (Python / FastAPI)
+  # ---------------------------------------------------------------------------
+  ai-audit-worker:
+    build:
+      context: ./services/ai-audit-worker
+      dockerfile: Dockerfile
+    container_name: nexusflow-ai-audit-worker
+    restart: unless-stopped
+    mem_limit: 180m
+    ports:
+      - "8000:8000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=mock_access_key
+      - AWS_SECRET_ACCESS_KEY=mock_secret_key
+      - S3_AUDIT_BUCKET=nexusflow-audit-archive
+      - SQS_ALERT_QUEUE=http://localstack:4566/000000000000/nexusflow-anomaly-alerts
+      - ANOMALY_THRESHOLD_AMOUNT=10000.00
+      - LLM_PROVIDER=mock
+    depends_on:
+      - kafka
+      - localstack
+
+  # ---------------------------------------------------------------------------
+  # 9. Executive Web Dashboard (React / Vite)
+  # ---------------------------------------------------------------------------
+  web-dashboard:
+    build:
+      context: ./web-dashboard
+      dockerfile: Dockerfile
+    container_name: nexusflow-web-dashboard
+    restart: unless-stopped
+    mem_limit: 70m
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8080
+      - VITE_STREAM_API_URL=http://localhost:8081
+      - VITE_AI_AUDIT_URL=http://localhost:8000
+    depends_on:
+      - core-gateway-api
+
+volumes:
+  postgres_data:
+  kafka_data:
+  redis_data:
+  localstack_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
