@@ -53,7 +53,9 @@ jobs:
 
       - name: Run Pytest Suite
         working-directory: services/ai-audit-worker
-        run: pytest tests/
+        env:
+          PYTHONPATH: .
+        run: python -m pytest tests/
 
   # ---------------------------------------------------------------------------
   # 3. Security Hardening & Container Vulnerability Scan (SOC2 Compliance)
