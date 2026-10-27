@@ -34,6 +34,13 @@ Modern enterprise platforms handling mission-critical transactions cannot rely o
 
 ## 🏛️ System Architecture
 
+<div align="center">
+  <img src="architecture/nexusflow-architecture.png" alt="NexusFlow Analytics Distributed Architecture" width="850px" />
+</div>
+
+<details>
+<summary><b>Click to expand Mermaid Source Diagram</b></summary>
+
 ```mermaid
 flowchart TD
     Client["Client / k6 Load Generator"] -->|HTTP / JSON| WebUI["Web Analytics Portal (React / Vite)"]
@@ -69,6 +76,8 @@ flowchart TD
         Loki --> Grafana
     end
 ```
+
+</details>
 
 ---
 
